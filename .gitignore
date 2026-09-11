@@ -1,0 +1,39 @@
+.build/
+.swiftpm/
+build/
+.DS_Store
+*.xcuserstate
+.env
+.env.*
+!.env.example
+
+# Local rip output, session data, reports and diagnostics
+/reports/
+workspace.json
+*.log
+*.mp3
+*.flac
+*.wav
+*.aiff
+*.aif
+
+# Credentials and signing material stay outside Git
+/security/
+.credentials/
+*.p12
+*.pfx
+*.p8
+*.key
+*.pem
+*.keychain
+*.keychain-db
+*.mobileprovision
+
+# Private project coordination and local exports
+/.private-dev/
+/.twindem/
+/dist/
+
+# Python helper caches
+__pycache__/
+*.pyc

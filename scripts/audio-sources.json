@@ -1,0 +1,26 @@
+[
+  {
+    "name": "ffmpeg",
+    "url": "https://ffmpeg.org/releases/ffmpeg-9.0.1.tar.xz",
+    "sha256": "cf38e0e28c7e5605942c4a77755349b0145804a397af37eb1fb4c77cb237f635",
+    "archive": "ffmpeg-9.0.1.tar.xz"
+  },
+  {
+    "name": "lame",
+    "url": "https://downloads.sourceforge.net/project/lame/lame/4.0/lame-4.0.tar.gz",
+    "sha256": "3df5124d5ad3a98312ffd7ba6a9b36230e4f8a3e66d3ce0f425e336c32d216eb",
+    "archive": "lame-4.0.tar.gz"
+  },
+  {
+    "name": "libcdio",
+    "url": "https://github.com/libcdio/libcdio/releases/download/2.4.0/libcdio-2.4.0.tar.gz",
+    "sha256": "bf7cde63762bb12db7755c395c441e49406fde7e1d9f9a9be7e3b940b1f405d7",
+    "archive": "libcdio-2.4.0.tar.gz"
+  },
+  {
+    "name": "libcdio-paranoia",
+    "url": "https://github.com/libcdio/libcdio-paranoia/releases/download/release-10.2%2B2.0.2/libcdio-paranoia-10.2+2.0.2.tar.gz",
+    "sha256": "99488b8b678f497cb2e2f4a1a9ab4a6329c7e2537a366d5e4fef47df52907ff6",
+    "archive": "libcdio-paranoia-10.2+2.0.2.tar.gz"
+  }
+]
