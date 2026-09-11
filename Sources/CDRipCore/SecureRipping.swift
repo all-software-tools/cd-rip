@@ -2,7 +2,7 @@ import Foundation
 import CryptoKit
 import Darwin
 
-/// No AccurateRip lookup or offset calibration is claimed by this version.
+/// Read evidence and optional AccurateRip comparison; older sessions decode without it.
 public struct RipIntegrity: Codable, Equatable, Sendable {
     public let backend: String
     public let pcmSHA256: String
@@ -13,6 +13,9 @@ public struct RipIntegrity: Codable, Equatable, Sendable {
     public let readCompleted: Bool
     public let requiresReview: Bool
     public var pcmDeleted: Bool?
+    public var verification: AccurateRipVerification? = nil
+    public var statusTitle: String { verification?.status.title ?? "Audio needs review" }
+    public var statusDetail: String { verification?.detail ?? "Paranoia read completed. AccurateRip was not checked; offset was not calibrated." }
 }
 
 public struct OpticalRipEvent: Sendable {
@@ -65,11 +68,15 @@ final class OpticalLock {
 
 public actor SecureOpticalRipper {
     private let runner: any CLIRunning
-    private let encoder: PCMEncoder
+    private let encoder: any PCMEncoding
+    private let source: any DiscSource
+    private let evidenceRoot: URL
+    private let accurateRip: any AccurateRipLookingUp
     public let backendPath: String
     private var active = false
-    public init(runner: any CLIRunning = LocalCLIRunner(), encoder: PCMEncoder = PCMEncoder(), backendPath: String = AudioToolPaths.executable("cd-paranoia")) {
-        self.runner = runner; self.encoder = encoder; self.backendPath = backendPath
+    public init(runner: any CLIRunning = LocalCLIRunner(), encoder: any PCMEncoding = PCMEncoder(), backendPath: String = AudioToolPaths.executable("cd-paranoia"), accurateRip: any AccurateRipLookingUp = AccurateRipClient(), source: (any DiscSource)? = nil, evidenceRoot: URL = RipFileRouting.internalDirectory) {
+        self.runner = runner; self.encoder = encoder; self.backendPath = backendPath; self.accurateRip = accurateRip
+        self.source = source ?? MacOpticalSource(runner: runner); self.evidenceRoot = evidenceRoot
     }
     public func rip(_ session: RipSession, report: @Sendable @escaping (OpticalRipEvent) async throws -> Void) async throws {
         guard !active else { throw ConnectionError("A read operation is already running.") }
@@ -80,11 +87,18 @@ public actor SecureOpticalRipper {
               session.tracks.allSatisfy({ track in session.disc.tracks.contains { $0.id == track.id && $0.number == track.number } }) else {
             throw CDRipError.invalidSelection
         }
-        let current = try await MacOpticalSource(runner: runner).loadDisc()
-        guard current == session.disc else { throw ConnectionError("The CD or drive has changed. Detect the source again.") }
+        let current = try await source.loadDisc()
+        guard current.id == session.disc.id, current.optical?.device == optical.device, current.optical?.tracks == optical.tracks, optical.driveID == nil || optical.driveID == current.optical?.driveID else { throw ConnectionError("The CD or drive has changed. Detect the source again.") }
         guard FileManager.default.isExecutableFile(atPath: backendPath) else { throw ConnectionError("cd-paranoia is missing. Install libcdio-paranoia before ripping.") }
         let lock = try OpticalLock(device: optical.device)
         defer { withExtendedLifetime(lock) {} }
+        let verificationSettings = session.settingsSnapshot?.audioVerification ?? AudioVerificationSettings()
+        let driveID = current.optical?.driveID
+        let configuredOffset = verificationSettings.offset(for: driveID)
+        let offset = configuredOffset ?? 0
+        guard (-5880...5880).contains(offset), (0...2).contains(verificationSettings.mismatchRereads) else { throw ConnectionError("Invalid drive offset or reread limit.") }
+        let discID = try AccurateRipDiscID(tracks: optical.tracks)
+        let lookup: AccurateRipLookup = verificationSettings.enabled ? try await accurateRip.lookup(discID) : .disabled
         let destination = URL(fileURLWithPath: session.destinationPath)
         _ = try OutputFiles.validateDestination(destination, requiredBytes: OutputFiles.requiredBytes(seconds: session.tracks.map(\.duration).reduce(0,+), profile: session.outputProfile))
         let routing: RipOutputFolders? = session.outputFolders ?? RipOutputFolders()
@@ -97,10 +111,10 @@ public actor SecureOpticalRipper {
                 }
             }
         }
-        let root = RipFileRouting.internalDirectory.appendingPathComponent(session.id.uuidString)
+        let root = evidenceRoot.appendingPathComponent(session.id.uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         try JSONEncoder().encode(session).write(to: root.appendingPathComponent("session.json"), options: .atomic)
-        try Data("Audio not confirmed by AccurateRip. Offset not calibrated. Files are not finalized for broadcast. Logs are retained. WAV retention follows the session settings.\n".utf8).write(to: root.appendingPathComponent("NEEDS-REVIEW.txt"))
+        try Data("See each track’s integrity.json for read checks and AccurateRip status. Unverified results require review. Mismatches retain WAV and block conversion.\n".utf8).write(to: root.appendingPathComponent("NEEDS-REVIEW.txt"))
         do {
             let unmount = try await runner.run(path: "/usr/sbin/diskutil", arguments: ["unmount", "/dev/" + optical.device], directory: root, timeout: .seconds(30))
         guard unmount.code == 0 else { throw ConnectionError("The CD is busy and could not be unmounted for direct reading.") }
@@ -113,25 +127,49 @@ public actor SecureOpticalRipper {
                 try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: false)
                 let wavFolder = folder
                 try FileManager.default.createDirectory(at: wavFolder, withIntermediateDirectories: true)
-                let wav = wavFolder.appendingPathComponent(String(format: "Track %02d - ", track.number) + session.id.uuidString + ".wav")
+                var wav = wavFolder.appendingPathComponent(String(format: "Track %02d - ", track.number) + session.id.uuidString + ".wav")
                 guard !FileManager.default.fileExists(atPath: wav.path) else { throw ConnectionError("The WAV already exists. It will not be overwritten.") }
                 let expected = optical.tracks.first { $0.number == track.number }!
-                let summary = folder.appendingPathComponent("read-summary.log")
-                let console = folder.appendingPathComponent("read-console.log")
-                try await report(.init(trackID: track.id, phase: .reading, progress: 0))
-                // Default full paranoia, abort on any skip. No -Z/-Y, C2 shortcut or implicit offset.
-                let runner = self.runner, backendPath = self.backendPath
-                let read = try await TrackReadProgress.monitor(wav: wav, sectors: expected.sectorCount, read: {
-                    try await runner.run(path: backendPath, arguments: ["-d", optical.rawDevice, "-X", "-e", "-l", summary.path, String(track.number), wav.path], directory: folder, timeout: .seconds(max(180, track.duration * 8)), logURL: console)
-                }, progress: { fraction in
-                    try await report(.init(trackID: track.id, phase: .reading, progress: fraction * 0.78))
-                })
-                try Data(read.output.utf8).write(to: console, options: .atomic)
-                try ParanoiaReport.validate(code: read.code, console: read.output, summary: String(contentsOf: summary, encoding: .utf8))
-                let after = try await runner.run(path: backendPath, arguments: ["-d", optical.rawDevice, "-Q"], directory: folder, timeout: .seconds(45))
-                try Data(after.output.utf8).write(to: folder.appendingPathComponent("toc-after.log"))
-                try Self.validateTOC(after, expected: optical.tracks)
-                let pcm = try Self.wavePCM(wav, expectedBytes: expected.sectorCount * 2352)
+                var console = folder.appendingPathComponent("read-console.log")
+                var pcm = Data()
+                var verification: AccurateRipVerification?
+                for attempt in 0...verificationSettings.mismatchRereads {
+                    if attempt > 0 { wav = wavFolder.appendingPathComponent("read-attempt-\(attempt + 1).wav") }
+                    console = folder.appendingPathComponent("read-console-\(attempt + 1).log")
+                    let summary = folder.appendingPathComponent("read-summary-\(attempt + 1).log")
+                    try await report(.init(trackID: track.id, phase: .reading, progress: 0))
+                    // A fresh full-paranoia process for each attempt, abort-on-skip and no C2 shortcut.
+                    // Identical rereads are never substituted for an AccurateRip reference match.
+                    let runner = self.runner, backendPath = self.backendPath, attemptWAV = wav, attemptConsole = console
+                    let read = try await TrackReadProgress.monitor(wav: wav, sectors: expected.sectorCount, read: {
+                        try await runner.run(path: backendPath, arguments: Self.readArguments(device: optical.rawDevice, track: track.number, offset: offset, summary: summary, wav: attemptWAV), directory: folder, timeout: .seconds(max(180, track.duration * 8)), logURL: attemptConsole)
+                    }, progress: { fraction in
+                        try await report(.init(trackID: track.id, phase: .reading, progress: fraction * 0.78))
+                    })
+                    try Data(read.output.utf8).write(to: console, options: .atomic)
+                    try ParanoiaReport.validate(code: read.code, console: read.output, summary: String(contentsOf: summary, encoding: .utf8))
+                    let after = try await runner.run(path: backendPath, arguments: ["-d", optical.rawDevice, "-Q"], directory: folder, timeout: .seconds(45))
+                    try Data(after.output.utf8).write(to: folder.appendingPathComponent("toc-after-\(attempt + 1).log"))
+                    try Self.validateTOC(after, expected: optical.tracks)
+                    pcm = try Self.wavePCM(wav, expectedBytes: expected.sectorCount * 2352)
+                    let sums = try AccurateRipChecksums.calculate(pcm: pcm, number: track.number, trackCount: optical.tracks.count)
+                    var result = try AccurateRipVerifier.verify(sums, disc: discID, number: track.number, lookup: lookup)
+                    result.driveID = driveID; result.offsetSamples = offset; result.offsetConfigured = configuredOffset != nil; result.attempts = attempt + 1
+                    if result.status == .mismatch, case .records(let records) = lookup {
+                        result.offsetCandidates = try AccurateRipVerifier.offsetCandidates(pcm: pcm, references: records.map { $0.tracks[track.number - 1] }, currentOffset: offset)
+                    }
+                    verification = result
+                    try JSONEncoder().encode(result).write(to: folder.appendingPathComponent("accuraterip-\(attempt + 1).json"), options: .atomic)
+                    if result.status != .mismatch { break }
+                }
+                guard let verification else { throw ConnectionError("Audio verification did not finish.") }
+                if verification.status == .mismatch {
+                    var integrity = RipIntegrity(backend: "libcdio-paranoia 10.2+2.0.2", pcmSHA256: SHA256.hash(data: pcm).map { String(format: "%02x", $0) }.joined(), logPath: console.path, pcmPath: wav.path, accurateRip: verification.status.rawValue, offsetSamples: offset, readCompleted: true, requiresReview: true)
+                    integrity.verification = verification
+                    try JSONEncoder().encode(integrity).write(to: folder.appendingPathComponent("integrity.json"), options: .atomic)
+                    try await report(.init(trackID: track.id, phase: .failed, progress: 1, paths: [], integrity: integrity))
+                    continue // Keep every attempt's WAV/log; do not encode or publish this track.
+                }
                 let hash = SHA256.hash(data: pcm).map { String(format: "%02x", $0) }.joined()
                 try await report(.init(trackID: track.id, phase: .encoding, progress: 0.8))
                 let encoded = folder.appendingPathComponent("Encoded")
@@ -150,7 +188,8 @@ public actor SecureOpticalRipper {
                 if let routing, !routing.deleteWAVAfterConversion {
                     retainedWAV = try await RipFileRouting.publish([wav], folders: routing, fallback: session.destinationPath, sessionID: session.id)[0]
                 }
-                var integrity = RipIntegrity(backend: "libcdio-paranoia 10.2+2.0.2", pcmSHA256: hash, logPath: console.path, pcmPath: retainedWAV.path, accurateRip: "notChecked", offsetSamples: 0, readCompleted: true, requiresReview: true)
+                var integrity = RipIntegrity(backend: "libcdio-paranoia 10.2+2.0.2", pcmSHA256: hash, logPath: console.path, pcmPath: retainedWAV.path, accurateRip: verification.status.rawValue, offsetSamples: offset, readCompleted: true, requiresReview: verification.status != .verified)
+                integrity.verification = verification
                 try JSONEncoder().encode(integrity).write(to: folder.appendingPathComponent("integrity.json"), options: .atomic)
                 try await report(.init(trackID: track.id, phase: .awaitingVerification, progress: 1, paths: files.map(\.path), integrity: integrity))
                 if retainedWAV != wav { try FileManager.default.removeItem(at: wav) }
@@ -168,6 +207,10 @@ public actor SecureOpticalRipper {
             throw error
         }
         guard await remount(optical.device, directory: root) else { throw ConnectionError("Reading finished, but the CD could not be remounted. Check remount.log and mount it in Disk Utility.") }
+    }
+    static func readArguments(device: String, track: Int, offset: Int, summary: URL, wav: URL) -> [String] {
+        // Do not force overread: cd-paranoia pads outside the physical disc boundaries.
+        ["-d", device, "-X", "-e", "-O", String(offset), "-l", summary.path, String(track), wav.path]
     }
     private func remount(_ device: String, directory: URL) async -> Bool {
         let runner = self.runner
@@ -197,16 +240,30 @@ public actor SecureOpticalRipper {
         let data = try Data(contentsOf: url, options: .mappedIfSafe)
         func word(_ offset: Int) -> Int { (0..<4).reduce(0) { $0 | (Int(data[offset + $1]) << (8 * $1)) } }
         guard data.count >= 44, data.prefix(4) == Data("RIFF".utf8), data[8..<12] == Data("WAVE".utf8) else { throw ConnectionError("Incomplete or invalid WAV.") }
+        guard word(4) == data.count - 8 else { throw ConnectionError("Incomplete WAV container.") }
         var offset = 12
+        var validFormat = false
+        var pcm: Data?
         while offset + 8 <= data.count {
             let size = word(offset + 4)
-            guard size <= data.count - offset - 8 else { break }
+            guard size <= data.count - offset - 8 else { throw ConnectionError("Truncated WAV chunk.") }
+            let content = offset + 8
+            if data[offset..<offset+4] == Data("fmt ".utf8) {
+                guard !validFormat, size >= 16,
+                      data[content..<content+4] == Data([1, 0, 2, 0]),
+                      word(content + 4) == 44100, word(content + 8) == 176400,
+                      data[content+12..<content+16] == Data([4, 0, 16, 0]) else {
+                    throw ConnectionError("WAV must be stereo 16-bit 44.1 kHz PCM for AccurateRip.")
+                }
+                validFormat = true
+            }
             if data[offset..<offset+4] == Data("data".utf8) {
-                guard size == expectedBytes else { throw ConnectionError("Incomplete read: the sample count differs from the table of contents.") }
-                return data.subdata(in: offset+8..<offset+8+size)
+                guard pcm == nil, size == expectedBytes, size % 4 == 0 else { throw ConnectionError("Incomplete read: the sample count differs from the table of contents.") }
+                pcm = data.subdata(in: content..<content+size)
             }
             offset += 8 + size + size % 2
         }
+        if validFormat, offset == data.count, let pcm { return pcm }
         throw ConnectionError("Truncated WAV: PCM data is missing.")
     }
 }

@@ -2,7 +2,7 @@
 
 A native SwiftUI app for macOS that rips audio CDs from an external drive, converts tracks to MP3/FLAC, and prepares metadata for an AzuraCast radio library.
 
-Current version: **0.4.0 public beta**. The user interface is in English.
+Current version: **0.5.0 public beta**. The user interface is in English.
 
 ## Features
 
@@ -14,11 +14,13 @@ Current version: **0.4.0 public beta**. The user interface is in English.
 - Each session retains its own destination and saved settings. Returning to CD1 does not save files in CD2's folder.
 - Tagging backups, interrupted-operation recovery, missing-file checks, and protection against concurrent workspace writes.
 - Save metadata drafts when quitting, separately from writing tags to audio files.
+- Optional SFTP upload of MP3/FLAC, with a save-metadata-first option, generic-name warnings, pinned SSH host keys, and password/SSH-key authentication.
+- Local AccurateRip v1/v2 checksums, manual drive-offset profiles and distinct verification statuses. Online database access remains disabled pending approval.
 - **About CD Rip** with the application version, copyright notice, and a link to [mykeydigital.ro](https://mykeydigital.ro).
 
 ## Download and install
 
-Download the DMG for your Mac from [GitHub Releases](https://github.com/all-software-tools/cd-rip/releases/tag/v0.4.0-beta.1):
+Download the DMG for your Mac from [GitHub Releases](https://github.com/all-software-tools/cd-rip/releases/tag/v0.5.0-beta.1):
 
 - **Apple Silicon**: Macs with an Apple M-series chip.
 - **Intel**: experimental x86_64 build; physical Intel testing is pending.
@@ -56,6 +58,7 @@ The app checks for subscription-based authentication. Requests count toward your
 3. Enter or import the tracklist; verify physical track numbers, artists, and titles.
 4. Fill in metadata manually or with AI, then review the proposals.
 5. Click **Save all** and check the destinations shown for that session.
+6. Optionally configure SFTP in Settings, then use **Upload via SFTP** in Metadata. See the [SFTP guide](docs/SFTP-UPLOAD.md).
 
 The CD is temporarily unmounted for direct reading and remounted afterward. Do not run another ripper against the same drive at the same time.
 
@@ -91,7 +94,7 @@ and [distribution validation](docs/DISTRIBUTION-READINESS.md).
 
 ## Current limitations
 
-Audio fingerprint recognition, AccurateRip, and drive offset calibration are not implemented. OCR and AI research require human review. A decodable conversion does not certify a bit-perfect CD read. Only a single mounted audio CD is supported; mixed-mode, multisession, and pre-emphasis are not supported. AzuraCast integration currently requires manually uploading the resulting files.
+Audio fingerprint recognition and automatic drive-offset calibration are not implemented. AccurateRip checksums are calculated locally, but online database access is disabled pending third-party approval; this release does not certify AccurateRip matches. See [verification details](docs/ACCURATERIP.md). OCR and AI research require human review. A decodable conversion does not certify a bit-perfect CD read. Only a single mounted audio CD is supported; mixed-mode, multisession, and pre-emphasis are not supported. Upload can be started manually through SFTP to a compatible server; there is no AzuraCast station API integration or automatic post-rip transfer. SFTP requires an Ed25519 server host key.
 
 ## Contributing
 

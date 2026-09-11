@@ -11,6 +11,7 @@ public struct OpticalDiscInfo: Codable, Equatable, Sendable {
     public let device: String
     public let mountPath: String
     public let tracks: [OpticalTrack]
+    public var driveID: String? = nil
     public var rawDevice: String { "/dev/r" + device }
 }
 
@@ -74,7 +75,9 @@ public actor MacOpticalSource: DiscSource {
             catch {
                 throw ConnectionError("Cannot read the audio CD table of contents. Allow CD Rip access to removable volumes in macOS, then click Detect again. " + error.localizedDescription)
             }
-            discs.append(try AudioTOC.parse(data, device: device, mountPath: volume.path))
+            var disc = try AudioTOC.parse(data, device: device, mountPath: volume.path)
+            disc.optical?.driveID = OpticalDriveIdentity.identifier(device: device)
+            discs.append(disc)
         }
         return discs
     }

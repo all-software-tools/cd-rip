@@ -11,6 +11,7 @@ private struct MetadataPresentation: Identifiable {
         case ai(UUID)
         case cover(UUID)
         case saveFiles(UUID)
+        case sftp(UUID)
         case imageTracklist(UUID)
         case tags(RipSession, SessionTrack, TrackMetadata)
     }
@@ -43,7 +44,7 @@ struct MetadataWorkspace: View {
             if let session = model.currentSession {
                 HStack(spacing: 10) {
                     Label(session.outputProfile.title, systemImage: "waveform").font(.caption)
-                    Text("· \(session.tracks.count) tracks · " + (session.disc.source == .demonstration ? "simulation without audio" : "AccurateRip not checked")).font(.caption).foregroundStyle(Palette.muted)
+                    Text("· \(session.tracks.count) tracks · " + (session.disc.source == .demonstration ? "simulation without audio" : "\(session.tracks.filter { $0.integrity?.verification?.status == .verified }.count) AccurateRip verified")).font(.caption).foregroundStyle(Palette.muted)
                 }
                 Text("Session output: " + session.destinationPath).font(.caption).foregroundStyle(Palette.muted).textSelection(.enabled)
                 HStack(alignment: .top, spacing: 16) {
@@ -73,6 +74,13 @@ struct MetadataWorkspace: View {
                             }
                         }
                             .disabled(session.disc.source != .optical || session.tracks.allSatisfy { $0.outputPaths.isEmpty })
+                        Button("Upload via SFTP…") {
+                            let value = draft; let id = editingTrackID; let sid = editingSessionID
+                            Task {
+                                if dirty, let id { await model.saveMetadata(value, trackID: id, sessionID: sid); dirty = false }
+                                if !model.persistenceFailed { presentation = .init(content: .sftp(session.id)) }
+                            }
+                        }.disabled(session.disc.source != .optical || session.tracks.allSatisfy { $0.outputPaths.isEmpty })
                     }.card().frame(maxWidth: .infinity)
                     VStack(alignment: .leading, spacing: 12) {
                         Text("B  IDENTIFY AND COMPLETE").eyebrow()
@@ -128,6 +136,8 @@ struct MetadataWorkspace: View {
             switch item.content {
             case let .imageTracklist(sessionID):
                 TracklistImageView(model: model, sessionID: sessionID) { format = .artistTitle; loadSession() }
+            case let .sftp(sessionID):
+                SFTPUploadView(model: model, sessionID: sessionID)
             case let .saveFiles(sessionID):
                 SaveFilesView(model: model, sessionID: sessionID)
             case let .cover(sessionID):
@@ -188,10 +198,18 @@ struct MetadataWorkspace: View {
             Text("METADATA DRAFT").eyebrow()
             if let track = model.selectedTrack {
                 Text("Track \(track.number)").font(.headline)
-                Text(track.phase.label).font(.caption).foregroundStyle(.orange)
+                Text(track.ripStatusLabel).font(.caption).foregroundStyle(.orange)
                 if let error = track.error { Text(error).font(.caption2).foregroundStyle(.orange) }
                 if let integrity = track.integrity {
-                    Text("Paranoia read completed · audio needs review. AccurateRip not checked; offset not calibrated.").font(.caption2).foregroundStyle(.orange)
+                    Text(integrity.statusDetail).font(.caption2).foregroundStyle(integrity.requiresReview ? .orange : Palette.green)
+                    if let check = integrity.verification {
+                        Text("CRC v1: \(check.checksums.v1Hex) · v2: \(check.checksums.v2Hex)").font(.caption2.monospaced())
+                        Text("Read offset: \(check.offsetSamples) stereo samples · \(check.offsetConfigured ? "user configured" : "not calibrated") · \(check.attempts) read attempt(s)").font(.caption2).foregroundStyle(Palette.muted)
+                        if let confidence = check.confidence { Text("Matching reference confidence: \(confidence) · v\(check.version ?? 1)").font(.caption2).foregroundStyle(Palette.green) }
+                        if !check.offsetCandidates.isEmpty {
+                            Text("Possible total offsets: \(check.offsetCandidates.map(String.init).joined(separator: ", ")). These are pressing-dependent candidates, not a calibrated drive offset. Confirm on other known discs before saving a drive profile.").font(.caption2).foregroundStyle(.orange)
+                        }
+                    }
                     Button("Show audio and report") { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: integrity.logPath)]) }.font(.caption)
                 }
                 if !track.evidence.isEmpty {

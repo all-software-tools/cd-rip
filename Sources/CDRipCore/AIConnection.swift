@@ -92,7 +92,9 @@ public extension CLIRunning {
 }
 
 public struct LocalCLIRunner: CLIRunning {
+    private var environmentOverrides: [String: String] = [:]
     public init() {}
+    init(environmentOverrides: [String: String]) { self.environmentOverrides = environmentOverrides }
     /// Allowlist avoids inheriting API keys, provider overrides and SDK session variables.
     static func environment(_ original: [String: String]) -> [String: String] {
         var result = original.filter { ["HOME", "USER", "LOGNAME", "TMPDIR", "LANG", "LC_ALL"].contains($0.key) }
@@ -121,7 +123,7 @@ public struct LocalCLIRunner: CLIRunning {
         process.executableURL = URL(fileURLWithPath: path)
         process.arguments = arguments
         process.currentDirectoryURL = directory
-        process.environment = Self.environment(ProcessInfo.processInfo.environment)
+        process.environment = Self.environment(ProcessInfo.processInfo.environment).merging(environmentOverrides) { _, new in new }
         process.standardInput = FileHandle.nullDevice
         process.standardOutput = handle
         process.standardError = handle

@@ -79,7 +79,7 @@ func liveSecureOpticalPipeline() async throws {
     let final = try #require(await events.all.last)
     #expect(final.phase == .awaitingVerification)
     #expect(final.paths.count == 2)
-    #expect(final.integrity?.accurateRip == "notChecked")
+    #expect(final.integrity?.verification?.status == .accessPending)
     #expect(final.integrity?.requiresReview == true)
     for path in final.paths { #expect(FileManager.default.fileExists(atPath: path)) }
     #expect(try await MacOpticalSource().loadDisc().id == disc.id)

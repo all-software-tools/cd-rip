@@ -26,6 +26,33 @@ struct SettingsView: View {
                 .font(.caption).foregroundStyle(Palette.muted)
             Toggle("Play a sound when all selected tracks finish", isOn: $draft.completionSound)
             Divider()
+            Text("Audio verification").eyebrow()
+            Toggle("Online AccurateRip lookup", isOn: Binding(get: { draft.audioVerification.enabled && AccurateRipAccess.databaseApproved }, set: { draft.audioVerification.enabled = $0 }))
+                .disabled(!AccurateRipAccess.databaseApproved)
+            if !AccurateRipAccess.databaseApproved {
+                Text("Local v1/v2 checksums are calculated before conversion. Online access is pending AccurateRip’s approval for this application.").font(.caption).foregroundStyle(Palette.muted)
+                Link("AccurateRip access policy", destination: URL(string: "https://www.accuraterip.com/3rdparty-access.htm")!).font(.caption)
+            }
+            Stepper("Additional reads after a mismatch: \(draft.audioVerification.mismatchRereads)", value: $draft.audioVerification.mismatchRereads, in: 0...2).font(.caption)
+            Text("Mismatches keep their WAV and block conversion. Missing references or an unavailable service remain unverified. Matching repeated reads alone do not count as AccurateRip verification.").font(.caption).foregroundStyle(Palette.muted)
+            if let drive = model.disc?.optical?.driveID {
+                Text("Drive: \(drive)").font(.caption)
+                Toggle("Use a known read offset for this drive", isOn: Binding(get: { draft.audioVerification.driveOffsets[drive] != nil }, set: { enabled in
+                    if enabled { draft.audioVerification.driveOffsets[drive] = 0 } else { draft.audioVerification.driveOffsets.removeValue(forKey: drive) }
+                }))
+                if draft.audioVerification.driveOffsets[drive] != nil {
+                    HStack {
+                        Text("Read offset (stereo samples)").font(.caption)
+                        TextField("0", value: Binding(get: { draft.audioVerification.driveOffsets[drive] ?? 0 }, set: { draft.audioVerification.driveOffsets[drive] = max(-5880, min(5880, $0)) }), format: .number).textFieldStyle(.roundedBorder).frame(width: 110)
+                    }
+                    Text("Enter a documented offset for this exact model and firmware. A positive value reads later samples. Manual entry is not automatic calibration. Disc-edge padding is outside AccurateRip’s checked region for typical offsets.").font(.caption).foregroundStyle(Palette.muted)
+                }
+            } else {
+                Text("Detect a supported optical drive to configure its offset. Unidentified drives use zero without claiming calibration.").font(.caption).foregroundStyle(Palette.muted)
+            }
+            Divider()
+            SFTPSettingsFields(settings: $draft.sftp)
+            Divider()
             Text("AI provider").eyebrow()
             Picker("Provider", selection: $draft.aiProvider) {
                 ForEach([AIProvider.codexCLI, .claudeCLI]) { Text($0.title).tag($0) }

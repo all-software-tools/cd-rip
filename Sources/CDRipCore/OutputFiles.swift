@@ -68,7 +68,11 @@ public enum EncodingPlan {
 
 /// A hardware-independent encoder for validated PCM input. Files remain in a private staging
 /// directory until every requested output succeeds; publication refuses existing destinations.
-public struct PCMEncoder: Sendable {
+public protocol PCMEncoding: Sendable {
+    func encode(input: URL, profile: OutputProfile, trackNumber: Int, destination: URL) async throws -> [URL]
+}
+
+public struct PCMEncoder: PCMEncoding {
     public let ffmpegPath: String
     public let ffprobePath: String
     private let runner: any CLIRunning

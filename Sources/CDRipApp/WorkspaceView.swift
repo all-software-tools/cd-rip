@@ -82,7 +82,7 @@ struct WorkspaceView: View {
             Button { model.showSettings = true } label: {
                 Label("App settings", systemImage: "slider.horizontal.3").font(.system(size: 12)).foregroundStyle(Palette.muted)
             }.buttonStyle(.plain).padding(.top, 24).padding(.bottom, 24)
-            Text("VERSION 0.4.0  /  CD RIP").font(.system(size: 8, design: .monospaced)).foregroundStyle(Palette.muted.opacity(0.6))
+            Text("VERSION 0.5.0  /  CD RIP").font(.system(size: 8, design: .monospaced)).foregroundStyle(Palette.muted.opacity(0.6))
         }.padding(.horizontal, 22).padding(.bottom, 20).frame(width: 222).background(Color.black.opacity(0.18))
     }
     private func icon(_ tab: WorkspaceTab) -> String {
@@ -102,7 +102,7 @@ struct WorkspaceView: View {
         HStack(spacing: 10) {
             Image(systemName: model.demonstrationMode ? "flask" : "waveform.badge.exclamationmark").foregroundStyle(Palette.green)
             Text(model.demonstrationMode ? "DEMO MODE" : "AUDIO CD READING").font(.system(size: 9, weight: .bold)).tracking(1)
-            Text(model.demonstrationMode ? "Simulated extraction, without a CD or audio files." : "Paranoia reading. Output needs review; AccurateRip and offset calibration are not implemented yet.")
+            Text(model.demonstrationMode ? "Simulated extraction, without a CD or audio files." : "Full paranoia reading. Per-track checksum results are shown in Metadata.")
                 .font(.system(size: 11)).foregroundStyle(Palette.muted)
             Spacer(minLength: 0)
         }.padding(13).background(Palette.green.opacity(0.045), in: RoundedRectangle(cornerRadius: 9))
@@ -226,7 +226,7 @@ struct WorkspaceView: View {
             }
         }.card()
     }
-    private func phase(for id: String) -> String { model.currentSession?.tracks.first { $0.id == id }?.phase.label ?? (model.demonstrationMode ? "Ready for demo" : "Ready to read") }
+    private func phase(for id: String) -> String { model.currentSession?.tracks.first { $0.id == id }?.ripStatusLabel ?? (model.demonstrationMode ? "Ready for demo" : "Ready to read") }
 
     private var history: some View {
         VStack(alignment: .leading, spacing: 20) {

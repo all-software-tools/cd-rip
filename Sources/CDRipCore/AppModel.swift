@@ -177,6 +177,7 @@ public enum WorkspaceTab: String, CaseIterable, Sendable {
         workspace.sessions[s].tracks[t].progress = event.progress
         workspace.sessions[s].tracks[t].outputPaths = event.paths
         workspace.sessions[s].tracks[t].integrity = event.integrity
+        workspace.sessions[s].tracks[t].error = event.phase == .failed ? event.integrity?.statusDetail : nil
         workspace.sessions[s].updatedAt = Date()
         await persist()
         if persistenceFailed { throw ConnectionError("Reading stopped: the session could not be saved.") }
@@ -511,6 +512,56 @@ public enum WorkspaceTab: String, CaseIterable, Sendable {
             self.tagProgressText = "Saved tags and filenames · \(saved) tracks updated · \(skipped) already saved."
             self.message = self.tagProgressText
         }
+    }
+
+    public private(set) var isUploadingSFTP = false
+    public private(set) var sftpProgress = ""
+    public private(set) var sftpCompleted = 0
+    public private(set) var sftpTotal = 0
+    public func uploadSFTP(sessionID: UUID, formats: Set<String>, saveMetadata: Bool) async {
+        guard !isBusy, !persistenceFailed, isReady, let initial = workspace.sessions.first(where: { $0.id == sessionID }) else { return }
+        let ids = Set(initial.tracks.filter { !$0.outputPaths.isEmpty && $0.phase == .awaitingVerification && $0.integrity?.readCompleted == true }.map(\.id))
+        guard !ids.isEmpty else { message = "No completed audio files to upload."; return }
+        let settings = workspace.settings.sftp
+        do { try settings.validate() } catch { message = error.localizedDescription; return }
+        if saveMetadata {
+            await saveTagsAndFilenames(sessionID: sessionID, trackIDs: ids)
+            let saving = operation
+            await saving?.value
+            guard saving?.isCancelled != true else { message = "Upload cancelled."; return }
+            guard !persistenceFailed, let saved = workspace.sessions.first(where: { $0.id == sessionID }),
+                  saved.tracks.filter({ ids.contains($0.id) }).allSatisfy({ fileTagsAreCurrent($0, session: saved) }) else {
+                message = "Upload stopped: save the metadata successfully before uploading."; return
+            }
+        }
+        guard !isBusy, let session = workspace.sessions.first(where: { $0.id == sessionID }) else { return }
+        await refreshMediaFiles(sessionID: sessionID)
+        let tracks = session.tracks.filter { ids.contains($0.id) }
+        guard tracks.allSatisfy({ mediaIssue(for: $0) == nil }) else { message = "Some audio files are missing or changed. Resolve them before uploading."; return }
+        let files = tracks.flatMap { track in track.outputPaths.filter { formats.contains(URL(fileURLWithPath: $0).pathExtension.uppercased()) }.map { SFTPUploadFile(path: $0, trackID: track.id) } }
+        guard !files.isEmpty else { message = "No files in the selected formats."; return }
+        let directory = "CDRip-" + UUID().uuidString
+        isBusy = true; isUploadingSFTP = true; sftpCompleted = 0; sftpTotal = files.count
+        sftpProgress = "Connecting…"; message = nil
+        operation = Task { [weak self] in
+            guard let self else { return }
+            defer { self.isBusy = false; self.isUploadingSFTP = false; self.operation = nil }
+            do {
+                try await SFTPService().upload(files, settings: settings, directoryName: directory) { completed, total, filename in
+                    await self.receiveSFTP(completed: completed, total: total, filename: filename)
+                }
+                self.sftpProgress = "Uploaded \(files.count) files to \(settings.remoteDirectory)/\(directory)."
+                self.message = self.sftpProgress
+            } catch {
+                self.sftpProgress = Task.isCancelled ? "Upload cancelled. Completed files remain on the server; a partial file may remain as .part." : error.localizedDescription
+                self.sftpProgress += "\nRemote folder: \(settings.remoteDirectory)/\(directory)"
+                self.message = self.sftpProgress
+            }
+        }
+    }
+    private func receiveSFTP(completed: Int, total: Int, filename: String) {
+        sftpCompleted = completed; sftpTotal = total
+        sftpProgress = "\(completed)/\(total) files completed · \(filename)"
     }
 
     public func writeTags(metadata: TrackMetadata, trackID: String, sessionID: UUID) async {

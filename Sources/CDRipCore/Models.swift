@@ -110,6 +110,7 @@ public struct SessionTrack: Codable, Equatable, Identifiable, Sendable {
     public var id: String
     public var number: Int
     public var duration: TimeInterval
+    public var ripStatusLabel: String { integrity?.verification?.status.title ?? phase.label }
     public var phase: WorkPhase = .pending
     public var progress: Double = 0
     public var identification: IdentificationStatus = .notChecked
@@ -182,6 +183,8 @@ public struct AppSettings: Codable, Equatable, Sendable {
     public var completionSound = true
     public var codexModel = ""
     public var claudeModel = ""
+    public var sftp = SFTPSettings()
+    public var audioVerification = AudioVerificationSettings()
     public var maxAICallsPerSession = 25
     public var metadataModel: String {
         switch aiProvider {
@@ -197,10 +200,12 @@ public struct AppSettings: Codable, Equatable, Sendable {
     public var codexPath = "/opt/homebrew/bin/codex"
     public var claudePath = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".local/bin/claude").path
     enum CodingKeys: String, CodingKey {
-        case codexModel, claudeModel, maxAICallsPerSession, outputFolders, completionSound, destinationPath, profile, azureEndpoint, azureDeployment, aiProvider, codexPath, claudePath
+        case sftp, audioVerification, codexModel, claudeModel, maxAICallsPerSession, outputFolders, completionSound, destinationPath, profile, azureEndpoint, azureDeployment, aiProvider, codexPath, claudePath
     }
     public init(from decoder: any Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
+        sftp = try c.decodeIfPresent(SFTPSettings.self, forKey: .sftp) ?? SFTPSettings()
+        audioVerification = try c.decodeIfPresent(AudioVerificationSettings.self, forKey: .audioVerification) ?? AudioVerificationSettings()
         outputFolders = try c.decodeIfPresent(RipOutputFolders.self, forKey: .outputFolders) ?? RipOutputFolders()
         completionSound = try c.decodeIfPresent(Bool.self, forKey: .completionSound) ?? true
         codexModel = try c.decodeIfPresent(String.self, forKey: .codexModel) ?? ""
