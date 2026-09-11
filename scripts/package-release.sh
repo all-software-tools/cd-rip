@@ -29,6 +29,21 @@ ln -s /Applications "$staging/Applications"
 cp docs/INSTALLATION.md "$staging/Read me.txt"
 dmg="$PWD/dist/CD-Rip-$version-$arch.dmg"
 hdiutil create -volname 'CD Rip' -srcfolder "$staging" -format UDZO "$dmg"
+# Some macOS versions leave a newly created APFS image attached internally.
+# Detach only this exact output image before validation/signing/notarization.
+python3 - "$dmg" <<'PYIMAGE'
+import pathlib, plistlib, re, subprocess, sys
+expected = pathlib.Path(sys.argv[1]).resolve()
+info = plistlib.loads(subprocess.check_output(['hdiutil', 'info', '-plist']))
+for image in info.get('images', []):
+    if pathlib.Path(image.get('image-path', '/')).resolve() != expected:
+        continue
+    devices = [x.get('dev-entry', '') for x in image.get('system-entities', [])]
+    whole = next((x for x in devices if re.fullmatch(r'/dev/disk[0-9]+', x)), None)
+    if whole:
+        subprocess.run(['hdiutil', 'detach', whole], check=True)
+PYIMAGE
+hdiutil verify "$dmg"
 codesign --timestamp --sign "$identity" "$dmg"
 xcrun notarytool submit "$dmg" --keychain-profile "$profile" --wait
 xcrun stapler staple "$dmg"
